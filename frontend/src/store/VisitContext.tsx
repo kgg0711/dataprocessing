@@ -1,127 +1,128 @@
-// 한 번의 관람 세션 상태 (취향 → 시간 → 추천 → 경로 → 감상 반복 → 영수증)
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { tasteLabel } from '../data/mock';
-import type { Exhibition, Reaction, Recommendation, TasteId, VisitDuration, VisitRecord } from '../types';
-import { readJSON, today, uid, writeJSON } from '../utils/storage';
+/**
+ * 관람 세션 전역 상태 (Context + useReducer)
+ *
+ * - Context: 여러 화면(U-01~U-13)이 같은 데이터를 props 전달 없이 함께 쓰도록 하는 React 기능
+ * - useReducer: "어떤 동작(action)이 일어나면 상태가 어떻게 바뀐다"를 한곳(reducer)에 모아 두는 훅
+ *
+ * 관람 진행 정보는 sessionStorage(탭을 닫으면 사라짐)에,
+ * 로그인 사용자는 localStorage(다시 방문해도 유지)에 저장한다.
+ */
+import { createContext, useContext, useEffect, useMemo, useReducer, type Dispatch, type ReactNode } from 'react';
+import type { Reaction, Recommendation, TasteTag, User, VisitDuration } from '../types';
+import { load, save } from '../lib/storage';
 
-const VISIT_KEY = 'arti.visit';
+export const DEFAULT_EXHIBITION_ID = 'ex-mvp';
 
-interface VisitState {
-  exhibition: Exhibition | null;
-  tastes: TasteId[];
+export interface VisitState {
+  exhibitionId: string;
+  user: User | null;
+  tastes: TasteTag[];
   duration: VisitDuration | null;
   recommendations: Recommendation[];
-  /** 현재 감상(또는 다음 안내) 대상 작품 인덱스 */
-  currentIndex: number;
+  /** 지금 보러 갈(또는 보고 있는) 추천 작품의 인덱스 (0부터) */
+  current: number;
+  viewed: string[];
   reactions: Record<string, Reaction>;
-  /** 작품별 누적 감상 시간(ms) */
-  viewTimes: Record<string, number>;
-  viewedIds: string[];
+  /** 작품별 감상 시간(초) — 아트 영수증의 "가장 오래 본 작품" 계산용 */
+  dwell: Record<string, number>;
   startedAt: number | null;
-  /** 관람 종료 시 확정된 아트 영수증 */
-  record: VisitRecord | null;
 }
 
-const initial: VisitState = {
-  exhibition: null,
-  tastes: [],
+type Action =
+  | { type: 'setExhibition'; id: string }
+  | { type: 'login'; user: User }
+  | { type: 'logout' }
+  | { type: 'setTastes'; tastes: TasteTag[] }
+  | { type: 'setDuration'; duration: VisitDuration }
+  | { type: 'setRecommendations'; recs: Recommendation[] }
+  | { type: 'startVisit' }
+  | { type: 'addDwell'; artworkId: string; seconds: number }
+  | { type: 'react'; artworkId: string; reaction: Reaction | null }
+  | { type: 'completeCurrent' }
+  | { type: 'resetVisit' };
+
+const VISIT_KEY = 'arti.visit';
+const USER_KEY = 'arti.user';
+
+const emptyVisit = {
+  tastes: [] as TasteTag[],
   duration: null,
-  recommendations: [],
-  currentIndex: 0,
-  reactions: {},
-  viewTimes: {},
-  viewedIds: [],
+  recommendations: [] as Recommendation[],
+  current: 0,
+  viewed: [] as string[],
+  reactions: {} as Record<string, Reaction>,
+  dwell: {} as Record<string, number>,
   startedAt: null,
-  record: null,
 };
 
-interface VisitValue extends VisitState {
-  setExhibition: (e: Exhibition) => void;
-  setTastes: (t: TasteId[]) => void;
-  setDuration: (d: VisitDuration) => void;
-  setRecommendations: (r: Recommendation[]) => void;
-  startViewing: () => void;
-  addViewTime: (artworkId: string, ms: number) => void;
-  markViewed: (artworkId: string) => void;
-  react: (artworkId: string, r: Reaction | null) => void;
-  /** 다음 작품으로 진행. 남은 작품이 있으면 true */
-  advance: () => boolean;
-  /** 관람 종료: 아트 영수증을 확정한다 */
-  finish: () => VisitRecord;
-  reset: () => void;
+function init(): VisitState {
+  const stored = load<Partial<VisitState>>(VISIT_KEY, {}, 'session');
+  return {
+    exhibitionId: DEFAULT_EXHIBITION_ID,
+    ...emptyVisit,
+    ...stored,
+    user: load<User | null>(USER_KEY, null),
+  };
 }
 
-const VisitContext = createContext<VisitValue | null>(null);
+function reducer(s: VisitState, a: Action): VisitState {
+  switch (a.type) {
+    case 'setExhibition':
+      return s.exhibitionId === a.id ? s : { ...s, ...emptyVisit, exhibitionId: a.id };
+    case 'login':
+      return { ...s, user: a.user };
+    case 'logout':
+      return { ...s, user: null };
+    case 'setTastes':
+      return { ...s, tastes: a.tastes };
+    case 'setDuration':
+      return { ...s, duration: a.duration };
+    case 'setRecommendations':
+      return { ...s, recommendations: a.recs, current: 0, viewed: [], reactions: {}, dwell: {}, startedAt: null };
+    case 'startVisit':
+      return s.startedAt ? s : { ...s, startedAt: Date.now() };
+    case 'addDwell':
+      return { ...s, dwell: { ...s.dwell, [a.artworkId]: (s.dwell[a.artworkId] ?? 0) + a.seconds } };
+    case 'react': {
+      const reactions = { ...s.reactions };
+      if (a.reaction) reactions[a.artworkId] = a.reaction;
+      else delete reactions[a.artworkId];
+      return { ...s, reactions };
+    }
+    case 'completeCurrent': {
+      const rec = s.recommendations[s.current];
+      if (!rec) return s;
+      const viewed = s.viewed.includes(rec.artworkId) ? s.viewed : [...s.viewed, rec.artworkId];
+      return { ...s, viewed, current: s.current + 1 };
+    }
+    case 'resetVisit':
+      return { ...s, ...emptyVisit };
+  }
+}
+
+interface Ctx {
+  state: VisitState;
+  dispatch: Dispatch<Action>;
+}
+
+const VisitCtx = createContext<Ctx | null>(null);
 
 export function VisitProvider({ children }: { children: ReactNode }) {
-  const [state, setState] = useState<VisitState>(() => readJSON('session', VISIT_KEY, initial));
+  const [state, dispatch] = useReducer(reducer, undefined, init);
 
-  useEffect(() => writeJSON('session', VISIT_KEY, state), [state]);
-
-  const patch = useCallback((p: Partial<VisitState> | ((s: VisitState) => Partial<VisitState>)) => {
-    setState((s) => ({ ...s, ...(typeof p === 'function' ? p(s) : p) }));
-  }, []);
-
-  const finish = useCallback((): VisitRecord => {
-    const s = state;
-    if (s.record) return s.record;
-    const recs = s.recommendations;
-    const longestId = Object.entries(s.viewTimes).sort((a, b) => b[1] - a[1])[0]?.[0];
-    const likedTags = recs.filter((r) => s.reactions[r.artwork.id] === 'like').flatMap((r) => r.artwork.tags);
-    const keywords = Array.from(new Set([...likedTags, ...s.tastes])).slice(0, 4).map(tasteLabel);
-    const record: VisitRecord = {
-      id: uid('h'),
-      exhibitionTitle: s.exhibition?.title ?? '',
-      venue: s.exhibition?.venue ?? '',
-      date: today(),
-      durationMin: s.startedAt ? Math.max(1, Math.round((Date.now() - s.startedAt) / 60000)) : 0,
-      viewedCount: s.viewedIds.length,
-      recommendedCount: recs.length,
-      likeCount: Object.values(s.reactions).filter((r) => r === 'like').length,
-      longestArtwork: recs.find((r) => r.artwork.id === longestId)?.artwork.title ?? '-',
-      keywords,
-      artworks: recs
-        .filter((r) => s.viewedIds.includes(r.artwork.id))
-        .map((r) => ({ title: r.artwork.title, artist: r.artwork.artist, reaction: s.reactions[r.artwork.id] })),
-    };
-    setState((prev) => ({ ...prev, record }));
-    return record;
+  // 상태가 바뀔 때마다 저장소에 반영 (새로고침해도 관람 흐름 유지)
+  useEffect(() => {
+    const { user, ...visit } = state;
+    save(VISIT_KEY, visit, 'session');
+    save(USER_KEY, user);
   }, [state]);
 
-  const value = useMemo<VisitValue>(
-    () => ({
-      ...state,
-      setExhibition: (exhibition) => patch({ exhibition }),
-      setTastes: (tastes) => patch({ tastes }),
-      setDuration: (duration) => patch({ duration }),
-      setRecommendations: (recommendations) =>
-        patch({ recommendations, currentIndex: 0, reactions: {}, viewTimes: {}, viewedIds: [], startedAt: null, record: null }),
-      startViewing: () => patch((s) => ({ startedAt: s.startedAt ?? Date.now() })),
-      addViewTime: (id, ms) => patch((s) => ({ viewTimes: { ...s.viewTimes, [id]: (s.viewTimes[id] ?? 0) + ms } })),
-      markViewed: (id) => patch((s) => (s.viewedIds.includes(id) ? {} : { viewedIds: [...s.viewedIds, id] })),
-      react: (id, r) =>
-        patch((s) => {
-          const reactions = { ...s.reactions };
-          if (r) reactions[id] = r;
-          else delete reactions[id];
-          return { reactions };
-        }),
-      advance: () => {
-        const hasNext = state.currentIndex + 1 < state.recommendations.length;
-        if (hasNext) patch({ currentIndex: state.currentIndex + 1 });
-        return hasNext;
-      },
-      finish,
-      reset: () => setState({ ...initial }),
-    }),
-    [state, patch, finish],
-  );
-
-  return <VisitContext.Provider value={value}>{children}</VisitContext.Provider>;
+  const value = useMemo(() => ({ state, dispatch }), [state]);
+  return <VisitCtx.Provider value={value}>{children}</VisitCtx.Provider>;
 }
 
-export function useVisit() {
-  const ctx = useContext(VisitContext);
-  if (!ctx) throw new Error('useVisit must be used within VisitProvider');
+export function useVisit(): Ctx {
+  const ctx = useContext(VisitCtx);
+  if (!ctx) throw new Error('useVisit은 VisitProvider 안에서만 사용할 수 있어요.');
   return ctx;
 }

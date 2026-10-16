@@ -1,4 +1,25 @@
+/**
+ * 작품 이미지 자리표시자.
+ * imageUrl이 있으면 실제 이미지를, 없으면 palette 색상으로 추상 구성 이미지를 SVG로 그린다.
+ * seed(작품 id)가 같으면 항상 같은 그림이 나오도록 간단한 의사 난수(mulberry32)를 쓴다.
+ */
 import { useMemo } from 'react';
+
+function mulberry32(seed: number) {
+  return () => {
+    seed |= 0;
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function hash(s: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
+  return h >>> 0;
+}
 
 interface Props {
   seed: string;
@@ -6,43 +27,42 @@ interface Props {
   imageUrl?: string;
   alt: string;
   className?: string;
+  ratio?: number; // 가로/세로 비율
 }
 
-function rng(seed: string) {
-  let h = 2166136261;
-  for (const c of seed) h = Math.imul(h ^ c.charCodeAt(0), 16777619);
-  return () => {
-    h = Math.imul(h ^ (h >>> 15), 2246822507);
-    h = Math.imul(h ^ (h >>> 13), 3266489909);
-    return ((h ^= h >>> 16) >>> 0) / 4294967296;
-  };
-}
-
-/**
- * 작품 이미지. imageUrl이 없으면 팔레트 기반의 추상 플레이스홀더를 그린다.
- * (목업의 작품 이미지는 예시이며 실제 구현에서는 검증된 작품 이미지로 교체)
- */
-export default function ArtImage({ seed, palette, imageUrl, alt, className }: Props) {
+export function ArtImage({ seed, palette, imageUrl, alt, className, ratio = 4 / 3 }: Props) {
   const shapes = useMemo(() => {
-    const r = rng(seed);
-    const [bg, ...cols] = palette;
-    const list = Array.from({ length: 26 }, (_, i) => {
-      const fill = cols[Math.floor(r() * cols.length)] ?? '#ccc';
-      const x = r() * 120 - 10;
-      const y = r() * 90 - 10;
-      const s = 10 + r() * 28;
-      return r() > 0.5
-        ? <circle key={i} cx={x} cy={y} r={s / 2} fill={fill} />
-        : <rect key={i} x={x} y={y} width={s} height={s * (0.6 + r())} fill={fill} />;
+    const rnd = mulberry32(hash(seed));
+    const pick = () => palette[Math.floor(rnd() * palette.length)];
+    return Array.from({ length: 26 }, (_, i) => {
+      const kind = rnd() > 0.5 ? 'c' : 'r';
+      const size = 10 + rnd() * 32;
+      return { kind, x: rnd() * 120 - 10, y: rnd() * 100 - 10, size, fill: pick(), key: i };
     });
-    return { bg, list };
   }, [seed, palette]);
 
-  if (imageUrl) return <img className={className} src={imageUrl} alt={alt} />;
+  if (imageUrl) {
+    return <img className={className} src={imageUrl} alt={alt} style={{ aspectRatio: ratio, objectFit: 'cover' }} />;
+  }
+
+  const h = 100 / ratio;
   return (
-    <svg className={className} viewBox="0 0 100 75" preserveAspectRatio="xMidYMid slice" role="img" aria-label={alt}>
-      <rect width="100" height="75" fill={shapes.bg} />
-      {shapes.list}
+    <svg
+      className={className}
+      viewBox={`0 0 100 ${h}`}
+      preserveAspectRatio="xMidYMid slice"
+      role="img"
+      aria-label={alt}
+      style={{ aspectRatio: ratio, display: 'block', width: '100%' }}
+    >
+      <rect width="100" height={h} fill={palette[0]} />
+      {shapes.map((s) =>
+        s.kind === 'c' ? (
+          <circle key={s.key} cx={s.x} cy={(s.y * h) / 100} r={s.size / 2} fill={s.fill} />
+        ) : (
+          <rect key={s.key} x={s.x} y={(s.y * h) / 100} width={s.size} height={s.size * 0.8} fill={s.fill} />
+        ),
+      )}
     </svg>
   );
 }

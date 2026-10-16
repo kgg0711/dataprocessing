@@ -1,72 +1,104 @@
-// U-04 회원가입: 취향·관람 기록 저장을 위한 계정 생성
+/** U-04 회원가입 — 가입 완료 후 U-05 취향 파악으로 이동 */
 import { useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
-import MobileLayout from '../../components/MobileLayout';
-import { useAuth } from '../../store/AuthContext';
-import { EMAIL_RE, MIN_PASSWORD } from '../../utils/validation';
+import { Lead, MobileShell } from '../../components/MobileShell';
+import { Field, isEmail, isValidPassword } from '../../components/Field';
+import { api } from '../../api/client';
+import { useVisit } from '../../store/VisitContext';
+
+type Errors = Partial<Record<'email' | 'password' | 'confirm' | 'terms' | 'form', string>>;
 
 export default function U04Signup() {
   const navigate = useNavigate();
-  const { signup } = useAuth();
-  const [form, setForm] = useState({ email: '', password: '', confirm: '', nickname: '', agree: false });
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
-  const set = (k: keyof typeof form) => (v: string | boolean) => setForm((f) => ({ ...f, [k]: v }));
+  const { dispatch } = useVisit();
+  const [form, setForm] = useState({ email: '', password: '', confirm: '', nickname: '' });
+  const [terms, setTerms] = useState({ service: false, privacy: false });
+  const [errors, setErrors] = useState<Errors>({});
+  const [submitting, setSubmitting] = useState(false);
+
+  // 입력 필드 공통 변경 함수: set("email")처럼 바꿀 항목 이름을 받아 onChange 함수를 만들어 준다
+  const set = (k: keyof typeof form) => (e: { target: { value: string } }) =>
+    setForm((f) => ({ ...f, [k]: e.target.value }));
+
+  const validate = (): Errors => {
+    const er: Errors = {};
+    if (!isEmail(form.email)) er.email = '이메일 형식을 확인해 주세요.';
+    if (!isValidPassword(form.password)) er.password = '8자 이상, 영문과 숫자를 함께 써 주세요.';
+    if (form.confirm !== form.password) er.confirm = '비밀번호가 일치하지 않아요.';
+    if (!terms.service || !terms.privacy) er.terms = '필수 약관에 동의해 주세요.';
+    return er;
+  };
 
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    if (!EMAIL_RE.test(form.email)) return setError('올바른 이메일 형식을 입력해 주세요.');
-    if (form.password.length < MIN_PASSWORD) return setError(`비밀번호는 ${MIN_PASSWORD}자 이상이어야 합니다.`);
-    if (form.password !== form.confirm) return setError('비밀번호 확인이 일치하지 않습니다.');
-    if (!form.agree) return setError('약관에 동의해 주세요.');
-    setError('');
-    setLoading(true);
+    const er = validate();
+    setErrors(er);
+    if (Object.keys(er).length) return;
+    setSubmitting(true);
     try {
-      await signup(form.email, form.password, form.nickname);
+      const user = await api.signup({ email: form.email, password: form.password, nickname: form.nickname });
+      dispatch({ type: 'login', user });
+      dispatch({ type: 'setTastes', tastes: [] });
       navigate('/taste', { replace: true });
     } catch (err) {
-      setError((err as Error).message);
+      setErrors({ form: err instanceof Error ? err.message : '가입에 실패했어요.' });
     } finally {
-      setLoading(false);
+      setSubmitting(false);
     }
   };
 
+  const allChecked = terms.service && terms.privacy;
+
   return (
-    <MobileLayout
-      title="회원가입"
-      footer={
-        <button className="btn btn--primary" type="submit" form="signup-form" disabled={loading}>
-          {loading ? '가입 중…' : '회원가입'}
+    <MobileShell screenId="U-04" title="회원가입">
+      <Lead title="취향과 기록을 저장해요" desc="다음 관람에서도 내 취향으로 바로 추천받을 수 있어요." />
+
+      <form className="stack gap-16" onSubmit={onSubmit} noValidate>
+        <Field label="이메일" type="email" autoComplete="email" value={form.email} onChange={set('email')} error={errors.email} />
+        <Field
+          label="비밀번호"
+          type="password"
+          autoComplete="new-password"
+          value={form.password}
+          onChange={set('password')}
+          error={errors.password}
+          hint="8자 이상, 영문+숫자"
+        />
+        <Field
+          label="비밀번호 확인"
+          type="password"
+          autoComplete="new-password"
+          value={form.confirm}
+          onChange={set('confirm')}
+          error={errors.confirm}
+        />
+        <Field label="닉네임 (선택)" value={form.nickname} onChange={set('nickname')} maxLength={12} />
+
+        <fieldset className="terms">
+          <label className="check all">
+            <input
+              type="checkbox"
+              checked={allChecked}
+              onChange={(e) => setTerms({ service: e.target.checked, privacy: e.target.checked })}
+            />
+            전체 동의
+          </label>
+          <label className="check">
+            <input type="checkbox" checked={terms.service} onChange={(e) => setTerms((t) => ({ ...t, service: e.target.checked }))} />
+            [필수] 서비스 이용약관
+          </label>
+          <label className="check">
+            <input type="checkbox" checked={terms.privacy} onChange={(e) => setTerms((t) => ({ ...t, privacy: e.target.checked }))} />
+            [필수] 개인정보 수집·이용 (취향·관람 기록)
+          </label>
+          {errors.terms && <span className="field-error">{errors.terms}</span>}
+        </fieldset>
+
+        {errors.form && <p className="error-text" role="alert">{errors.form}</p>}
+        <button className="btn primary block" type="submit" disabled={submitting}>
+          {submitting ? '가입 중…' : '회원가입'}
         </button>
-      }
-    >
-      <form id="signup-form" className="form" onSubmit={onSubmit} noValidate>
-        <div className="page-head">
-          <h1 className="h1">취향을 기억해 둘게요</h1>
-          <p className="sub">가입하면 취향과 관람 기록을 다음 관람에서 다시 사용할 수 있어요.</p>
-        </div>
-        <label className="field">
-          <span>이메일</span>
-          <input type="email" autoComplete="email" value={form.email} onChange={(e) => set('email')(e.target.value)} placeholder="example@email.com" />
-        </label>
-        <label className="field">
-          <span>비밀번호</span>
-          <input type="password" autoComplete="new-password" value={form.password} onChange={(e) => set('password')(e.target.value)} placeholder={`${MIN_PASSWORD}자 이상`} />
-        </label>
-        <label className="field">
-          <span>비밀번호 확인</span>
-          <input type="password" autoComplete="new-password" value={form.confirm} onChange={(e) => set('confirm')(e.target.value)} placeholder="비밀번호 재입력" />
-        </label>
-        <label className="field">
-          <span>닉네임 <em className="muted">(선택)</em></span>
-          <input value={form.nickname} onChange={(e) => set('nickname')(e.target.value)} placeholder="관람 기록에 표시할 이름" maxLength={20} />
-        </label>
-        <label className="checkbox">
-          <input type="checkbox" checked={form.agree} onChange={(e) => set('agree')(e.target.checked)} />
-          <span>[필수] 서비스 이용약관 및 개인정보 수집·이용에 동의합니다.</span>
-        </label>
-        {error && <p className="error">{error}</p>}
       </form>
-    </MobileLayout>
+    </MobileShell>
   );
 }

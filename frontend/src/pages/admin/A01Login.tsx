@@ -1,44 +1,55 @@
-// A-01 관리자 로그인
+/** A-01 관리자 로그인 */
 import { useState, type FormEvent } from 'react';
 import { Navigate, useNavigate } from 'react-router-dom';
-import { useAuth } from '../../store/AuthContext';
+import { api } from '../../api/client';
+import { save } from '../../lib/storage';
+import { ADMIN_KEY, isAdminLoggedIn } from './AdminLayout';
 
 export default function A01Login() {
   const navigate = useNavigate();
-  const { isAdmin, adminLogin } = useAuth();
   const [id, setId] = useState('');
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
+  const [pw, setPw] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
-  if (isAdmin) return <Navigate to="/admin" replace />;
+  if (isAdminLoggedIn()) return <Navigate to="/admin" replace />;
 
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
+    setSubmitting(true);
+    setError(null);
     try {
-      await adminLogin(id, password);
+      const admin = await api.adminLogin(id, pw);
+      save(ADMIN_KEY, admin);
       navigate('/admin', { replace: true });
     } catch (err) {
-      setError((err as Error).message);
+      setError(err instanceof Error ? err.message : '로그인에 실패했어요.');
+    } finally {
+      setSubmitting(false);
     }
   };
 
   return (
     <div className="admin-login">
-      <form className="a-card admin-login__card" onSubmit={onSubmit}>
-        <p className="admin__brand">ARTI <span>관리자</span></p>
+      <form className="admin-login-card" onSubmit={onSubmit}>
+        <div className="admin-brand">
+          <strong>ARTI</strong>
+          <span>관리자</span>
+        </div>
         <h1>관리자 로그인</h1>
-        <p className="muted small">전시·작품·위치 데이터 관리를 위해 관리자 계정으로 로그인하세요.</p>
         <label className="a-field">
           <span>관리자 ID</span>
-          <input value={id} onChange={(e) => setId(e.target.value)} autoComplete="username" required />
+          <input value={id} onChange={(e) => setId(e.target.value)} autoComplete="username" />
         </label>
         <label className="a-field">
           <span>비밀번호</span>
-          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" required />
+          <input type="password" value={pw} onChange={(e) => setPw(e.target.value)} autoComplete="current-password" />
         </label>
-        {error && <p className="error">{error}</p>}
-        <button className="a-btn a-btn--primary a-btn--block" type="submit">로그인</button>
-        <p className="hint">데모 계정: admin / admin1234</p>
+        {error && <p className="error-text">{error}</p>}
+        <button className="a-btn primary block" disabled={submitting || !id || !pw}>
+          {submitting ? '확인 중…' : '로그인'}
+        </button>
+        <p className="demo-hint">데모: admin / admin1234</p>
       </form>
     </div>
   );

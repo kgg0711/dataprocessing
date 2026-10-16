@@ -1,64 +1,79 @@
-// U-03 로그인: 기존 사용자 인증 및 저장 취향 불러오기
+/** U-03 로그인 — 외부 로그인 URL(/login)로 직접 진입 가능, ?redirect= 로 인증 후 복귀 */
 import { useState, type FormEvent } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import MobileLayout from '../../components/MobileLayout';
-import { useAuth } from '../../store/AuthContext';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Lead, MobileShell } from '../../components/MobileShell';
+import { Field, isEmail } from '../../components/Field';
+import { api } from '../../api/client';
+import { useVisit } from '../../store/VisitContext';
 
 export default function U03Login() {
   const navigate = useNavigate();
   const [params] = useSearchParams();
-  const next = params.get('next');
-  const { login } = useAuth();
+  const redirect = params.get('redirect');
+  const { dispatch } = useVisit();
+
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
   const onSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-    setError('');
-    setLoading(true);
+    e.preventDefault(); // form 기본 동작(페이지 새로고침) 막기
+    if (!isEmail(email)) return setError('이메일 형식을 확인해 주세요.');
+    if (!password) return setError('비밀번호를 입력해 주세요.');
+    setSubmitting(true);
+    setError(null);
     try {
-      await login(email, password);
-      // 관람기록 URL 등 특수 진입은 인증 후 원래 화면으로 복귀
-      navigate(next ?? '/taste/saved', { replace: true });
+      const user = await api.login(email, password);
+      dispatch({ type: 'login', user });
+      // 관람기록 URL 등에서 넘어온 경우 원래 화면으로, 아니면 U-06 저장 취향 확인
+      navigate(redirect && redirect.startsWith('/') ? redirect : '/taste/saved', { replace: true });
     } catch (err) {
-      setError((err as Error).message);
+      setError(err instanceof Error ? err.message : '로그인에 실패했어요.');
     } finally {
-      setLoading(false);
+      setSubmitting(false);
     }
   };
 
   return (
-    <MobileLayout
-      title="로그인"
-      back="/start"
-      footer={
-        <button className="btn btn--primary" type="submit" form="login-form" disabled={loading}>
-          {loading ? '로그인 중…' : '로그인'}
+    <MobileShell screenId="U-03" title="로그인" back="/entry">
+      <Lead title="다시 오셨군요" desc="로그인은 선택사항이에요. 저장된 취향과 관람기록을 이어서 쓸 수 있어요." />
+
+      <form className="stack gap-16" onSubmit={onSubmit} noValidate>
+        <Field
+          label="이메일"
+          type="email"
+          autoComplete="email"
+          inputMode="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="example@email.com"
+        />
+        <Field
+          label="비밀번호"
+          type="password"
+          autoComplete="current-password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          placeholder="비밀번호"
+        />
+        {error && <p className="error-text" role="alert">{error}</p>}
+        <button className="btn primary block" type="submit" disabled={submitting}>
+          {submitting ? '로그인 중…' : '로그인'}
         </button>
-      }
-    >
-      <form id="login-form" className="form" onSubmit={onSubmit}>
-        <div className="page-head">
-          <h1 className="h1">다시 오셨네요</h1>
-          <p className="sub">로그인은 선택사항이에요. 저장된 취향을 이번 관람에 활용합니다.</p>
-        </div>
-        <label className="field">
-          <span>이메일</span>
-          <input type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="example@email.com" required />
-        </label>
-        <label className="field">
-          <span>비밀번호</span>
-          <input type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="비밀번호" required />
-        </label>
-        {error && <p className="error">{error}</p>}
-        <div className="row-between small">
-          <Link className="link" to="/forgot-password">비밀번호 찾기</Link>
-          <Link className="link" to="/signup">회원가입</Link>
-        </div>
-        <p className="hint">데모 계정: demo@arti.kr / arti1234</p>
       </form>
-    </MobileLayout>
+
+      <div className="row-links">
+        <button className="link-btn" onClick={() => navigate('/password/forgot')}>
+          비밀번호 찾기
+        </button>
+        <span className="divider-dot" />
+        <button className="link-btn" onClick={() => navigate('/signup')}>
+          회원가입
+        </button>
+      </div>
+
+      <p className="demo-hint">데모 계정: demo@arti.app / arti1234</p>
+    </MobileShell>
   );
 }

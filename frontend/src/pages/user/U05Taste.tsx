@@ -1,66 +1,72 @@
-// U-05 취향 파악: 신규 사용자·비회원의 간단한 작품 선호 선택
+/** U-05 취향 파악 — 작품/시각적 특성 카드 다중 선택 (2개 이상) */
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import ArtImage from '../../components/ArtImage';
-import { IconCheck } from '../../components/Icons';
-import MobileLayout from '../../components/MobileLayout';
-import { TASTE_OPTIONS } from '../../data/mock';
-import { useAuth } from '../../store/AuthContext';
+import { Lead, MobileShell } from '../../components/MobileShell';
+import { ArtImage } from '../../components/ArtImage';
+import { Icon } from '../../components/Icon';
+import { TASTE_LABEL, TASTE_SAMPLES } from '../../data/mock';
+import { api } from '../../api/client';
 import { useVisit } from '../../store/VisitContext';
-import type { TasteId } from '../../types';
+import type { TasteTag } from '../../types';
 
 const MIN_SELECT = 2;
 
 export default function U05Taste() {
   const navigate = useNavigate();
-  const visit = useVisit();
-  const { user, updateTastes } = useAuth();
-  const [selected, setSelected] = useState<TasteId[]>(() => (visit.tastes.length ? visit.tastes : user?.tastes ?? []));
+  const { state, dispatch } = useVisit();
+  // "취향 수정하기"로 들어온 경우 기존 선택을 미리 체크해 둔다
+  const [selected, setSelected] = useState<TasteTag[]>(state.tastes);
 
-  const toggle = (id: TasteId) =>
-    setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
+  const toggle = (tag: TasteTag) =>
+    setSelected((cur) => (cur.includes(tag) ? cur.filter((t) => t !== tag) : [...cur, tag]));
 
-  const onDone = async () => {
-    visit.setTastes(selected);
-    if (user) await updateTastes(selected);
+  const done = async () => {
+    dispatch({ type: 'setTastes', tastes: selected });
+    if (state.user) {
+      // 로그인 사용자는 다음 관람을 위해 취향을 계정에 저장
+      await api.updateTastes(state.user.id, selected);
+      dispatch({ type: 'login', user: { ...state.user, tastes: selected } });
+    }
     navigate('/time');
   };
 
+  const ready = selected.length >= MIN_SELECT;
+
   return (
-    <MobileLayout
+    <MobileShell
+      screenId="U-05"
       title="취향 파악"
       footer={
-        <button className="btn btn--primary" disabled={selected.length < MIN_SELECT} onClick={onDone}>
-          선택 완료{selected.length > 0 && ` (${selected.length})`}
+        <button className="btn primary block" disabled={!ready} onClick={done}>
+          {ready ? `선택 완료 (${selected.length})` : '선택 완료'}
         </button>
       }
     >
-      <div className="page-head">
-        <h1 className="h1">더 끌리는 작품을 골라주세요</h1>
-        <p className="sub">장르명을 몰라도 괜찮아요. 선택 결과로 취향을 파악합니다.</p>
-      </div>
+      <Lead title="더 끌리는 작품을 골라주세요" desc="장르명을 몰라도 괜찮아요. 선택 결과로 취향을 파악합니다." />
 
       <div className="taste-grid">
-        {TASTE_OPTIONS.map((t) => {
-          const on = selected.includes(t.id);
+        {TASTE_SAMPLES.map(({ tag, palette }) => {
+          const on = selected.includes(tag);
           return (
             <button
-              key={t.id}
+              key={tag}
               type="button"
-              className={`taste-card ${on ? 'is-selected' : ''}`}
+              className={`taste-card ${on ? 'on' : ''}`}
               aria-pressed={on}
-              onClick={() => toggle(t.id)}
+              onClick={() => toggle(tag)}
             >
-              <ArtImage className="taste-card__img" seed={`taste-${t.id}`} palette={t.palette} alt={t.label} />
-              <span className="taste-card__foot">
-                <span className="taste-card__label">{t.label}</span>
-                <span className="radio-dot">{on && <IconCheck width={14} height={14} strokeWidth={3} />}</span>
+              <ArtImage seed={`taste-${tag}`} palette={palette} alt={TASTE_LABEL[tag]} ratio={4 / 3} />
+              <span className="taste-card-foot">
+                <span>{TASTE_LABEL[tag]}</span>
+                <span className="check-circle">{on && <Icon name="check" size={14} />}</span>
               </span>
             </button>
           );
         })}
       </div>
-      <p className="caption">{MIN_SELECT}개 이상 선택</p>
-    </MobileLayout>
+      <p className="muted small mt-12">
+        {MIN_SELECT}개 이상 선택 {selected.length > 0 && `· ${selected.length}개 선택됨`}
+      </p>
+    </MobileShell>
   );
 }

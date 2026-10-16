@@ -1,83 +1,151 @@
-// A-05 위치·지도 관리: 2D 평면도와 작품 위치 정보 관리
+/**
+ * A-05 위치·지도 관리
+ * 작품을 선택 → 평면도를 클릭해 좌표 지정 → 위치 저장.
+ * 여기서 저장한 좌표가 사용자 U-09 추천 경로와 관람 순서 계산에 쓰인다.
+ */
 import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import * as api from '../../api';
-import FloorMap, { type MapMarker } from '../../components/FloorMap';
-import { roomName } from '../../data/mock';
-import type { Artwork, Exhibition, Point } from '../../types';
-import { AdminPageHead } from './AdminLayout';
+import { api } from '../../api/client';
+import { useAsync } from '../../lib/useAsync';
+import { FloorMap, type MapMarker } from '../../components/FloorMap';
+import type { Artwork, MapPoint } from '../../types';
+import { PageHead } from './AdminLayout';
 
 export default function A05Map() {
   const [params, setParams] = useSearchParams();
-  const [exhibitions, setExhibitions] = useState<Exhibition[]>([]);
-  const [artworks, setArtworks] = useState<Artwork[]>([]);
-  const [exId, setExId] = useState('');
-  const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
-  const selectedId = params.get('artwork');
+  const { data: exhibitions } = useAsync(() => api.listExhibitions(), []);
+  const exId = params.get('exhibition') ?? exhibitions?.[0]?.id ?? '';
+  const { data: artworks, setData: setArtworks } = useAsync(
+    () => (exId ? api.listArtworks(exId) : Promise.resolve([] as Artwork[])),
+    [exId],
+  );
+  const [selectedId, setSelectedId] = useState<string | null>(params.get('artwork'));
+  const [draft, setDraft] = useState<MapPoint | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
 
   useEffect(() => {
-    Promise.all([api.adminGetExhibitions(), api.getArtworks()]).then(([exs, arts]) => {
-      setExhibitions(exs);
-      setArtworks(arts);
-      const fromArtwork = arts.find((a) => a.id === selectedId)?.exhibitionId;
-      setExId(fromArtwork ?? exs.find((e) => e.status === '운영 중')?.id ?? exs[0]?.id ?? '');
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    setDraft(null);
+    setMsg(null);
+  }, [selectedId]);
 
-  const list = artworks.filter((a) => a.exhibitionId === exId);
-  const select = (id: string) => setParams({ artwork: id }, { replace: true });
+  const ex = exhibitions?.find((e) => e.id === exId);
+  if (!ex || !artworks) return <PageHead title="위치·지도 관리" desc="불러오는 중…" />;
 
-  const markers: MapMarker[] = list
-    .filter((a) => a.position)
-    .map((a) => ({
-      id: a.id,
-      label: String(list.indexOf(a) + 1),
-      position: a.position!,
-      state: a.id === selectedId ? 'selected' : 'default',
+  const selected = artworks.find((w) => w.id === selectedId) ?? null;
+  const roomName = (w: Artwork) => ex.rooms.find((r) => r.id === w.roomId)?.name ?? '전시실 미지정';
+
+  const markers: MapMarker[] = artworks
+    .map((w, i) => ({ w, n: i + 1 }))
+    .filter(({ w }) => (w.id === selectedId && draft) || w.position)
+    .map(({ w, n }) => ({
+      id: w.id,
+      label: String(n),
+      title: w.title,
+      point: w.id === selectedId && draft ? draft : w.position!,
+      state: w.id === selectedId ? 'selected' : 'plain',
     }));
 
-  const onMapClick = async (p: Point, roomId: string | null) => {
-    if (!selectedId) return setMsg({ text: '먼저 오른쪽 목록에서 작품을 선택하세요.', error: true });
-    if (!roomId) return setMsg({ text: '전시실 영역 안을 클릭해 주세요.', error: true });
-    await api.adminSetArtworkPosition(selectedId, roomId, p);
-    setArtworks((arts) => arts.map((a) => (a.id === selectedId ? { ...a, position: p, roomId } : a)));
-    const title = artworks.find((a) => a.id === selectedId)?.title;
-    setMsg({ text: `‘${title}’ 위치를 ${roomName(roomId)} (${p.x}, ${p.y})로 저장했습니다.` });
+  const savePosition = async () => {
+    if (!selected || !draft) return;
+    // 클릭한 좌표가 어느 전시실 안에 있는지 계산해 전시실도 함께 갱신
+    const room = ex.rooms.find(
+      (r) => draft.x >= r.rect.x && draft.x <= r.rect.x + r.rect.w && draft.y >= r.rect.y && draft.y <= r.rect.y + r.rect.h,
+    );
+    const saved = await api.saveArtwork({ ...selected, position: draft, roomId: room?.id ?? selected.roomId });
+    setArtworks(artworks.map((w) => (w.id === saved.id ? saved : w)));
+    setDraft(null);
+    setMsg(`'${saved.title}' 위치를 저장했어요${room ? ` (${room.name})` : ''}.`);
+  };
+
+  const clearPosition = async () => {
+    if (!selected) return;
+    const saved = await api.saveArtwork({ ...selected, position: null });
+    setArtworks(artworks.map((w) => (w.id === saved.id ? saved : w)));
+    setMsg(`'${saved.title}' 위치를 해제했어요.`);
   };
 
   return (
     <>
-      <AdminPageHead
+      <PageHead
         title="위치·지도 관리"
         desc="2D 평면도 위에 작품 위치와 관람 순서 계산에 사용할 위치 정보를 등록합니다."
         actions={
-          <select className="a-select" value={exId} onChange={(e) => setExId(e.target.value)} aria-label="전시 선택">
-            {exhibitions.map((e) => <option key={e.id} value={e.id}>{e.title}</option>)}
+          <select
+            value={exId}
+            onChange={(e) => {
+              setSelectedId(null);
+              setParams({ exhibition: e.target.value });
+            }}
+            aria-label="전시 선택"
+          >
+            {exhibitions!.map((e) => (
+              <option key={e.id} value={e.id}>
+                {e.title}
+              </option>
+            ))}
           </select>
         }
       />
-      <div className="a-map-grid">
-        <section className="a-card">
-          <FloorMap markers={markers} onMapClick={onMapClick} onMarkerClick={select} className="floor-map--admin" />
-          {msg && <p className={msg.error ? 'error' : 'ok'}>{msg.text}</p>}
+      <div className="a-map-layout">
+        <section className="a-card pad">
+          {ex.rooms.length === 0 ? (
+            <p className="muted">이 전시에는 아직 평면도(전시실)가 등록되지 않았어요.</p>
+          ) : (
+            <>
+              <FloorMap
+                exhibition={ex}
+                markers={markers}
+                aspect={1.55}
+                onMapClick={selected ? setDraft : undefined}
+                onMarkerClick={setSelectedId}
+              />
+              <div className="a-map-bar">
+                {selected ? (
+                  <>
+                    <span>
+                      <strong>{selected.title}</strong> —{' '}
+                      {draft ? `새 위치 x ${draft.x}, y ${draft.y}` : '평면도를 클릭해 위치를 지정하세요'}
+                    </span>
+                    <span className="a-inline">
+                      {selected.position && !draft && (
+                        <button className="a-btn sm" onClick={clearPosition}>
+                          위치 해제
+                        </button>
+                      )}
+                      <button className="a-btn primary sm" disabled={!draft} onClick={savePosition}>
+                        위치 저장
+                      </button>
+                    </span>
+                  </>
+                ) : (
+                  <span className="muted">오른쪽 목록에서 작품을 선택한 뒤 지도 위치를 지정합니다.</span>
+                )}
+              </div>
+              {msg && <p className="ok-text">{msg}</p>}
+            </>
+          )}
         </section>
-        <aside className="a-card">
-          <h2 className="a-h3">작품 위치</h2>
-          <ul className="a-loc-list plain-list">
-            {list.map((a, i) => (
-              <li key={a.id}>
-                <button type="button" className={`a-loc ${a.id === selectedId ? 'is-selected' : ''}`} onClick={() => select(a.id)}>
-                  <span className="a-loc__num">{i + 1}</span>
-                  <span className="a-loc__title">{a.title} · {roomName(a.roomId)}</span>
-                  {!a.position && <span className="badge badge--warn">미등록</span>}
+
+        <aside className="a-card pad">
+          <h2>작품 위치</h2>
+          <ul className="a-pos-list">
+            {artworks.map((w, i) => (
+              <li key={w.id}>
+                <button className={`a-pos-item ${w.id === selectedId ? 'on' : ''}`} onClick={() => setSelectedId(w.id)}>
+                  <span className="a-pos-num">{i + 1}</span>
+                  <span className="a-pos-text">
+                    {w.title} · {roomName(w)}
+                  </span>
+                  {!w.position && <span className="badge pending">미등록</span>}
                 </button>
-                {a.id === selectedId && <Link className="link small a-loc__edit" to={`/admin/artworks/${a.id}`}>작품 정보 수정 →</Link>}
               </li>
             ))}
-            {list.length === 0 && <li className="muted small">이 전시에 등록된 작품이 없습니다.</li>}
           </ul>
-          <p className="note">작품을 선택한 뒤 지도 위치를 클릭하여 지정합니다.</p>
+          {selected && (
+            <Link className="a-btn block mt-12" to={`/admin/artworks/${selected.id}`}>
+              작품 관리로 이동
+            </Link>
+          )}
         </aside>
       </div>
     </>

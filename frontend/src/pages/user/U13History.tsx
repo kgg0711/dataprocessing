@@ -1,62 +1,74 @@
-// U-13 관람기록: 로그인 사용자의 이전 관람 기록 확인
-// 관람기록 URL로 직접 진입 시 미로그인 상태이면 U-03 인증 후 복귀
-import { useEffect, useState } from 'react';
-import { Navigate, useNavigate } from 'react-router-dom';
-import * as api from '../../api';
-import { IconChevron } from '../../components/Icons';
-import MobileLayout from '../../components/MobileLayout';
-import { fmtDate } from '../../components/ReceiptCard';
-import { useAuth } from '../../store/AuthContext';
-import type { VisitRecord } from '../../types';
+/** U-13 관람기록 — 관람기록 URL(/history) 직접 진입, 미로그인 시 U-03 인증 후 복귀 */
+import { Link, Navigate, useNavigate } from 'react-router-dom';
+import { Lead, MobileShell, Spinner } from '../../components/MobileShell';
+import { Icon } from '../../components/Icon';
+import { api } from '../../api/client';
+import { useAsync } from '../../lib/useAsync';
+import { useVisit } from '../../store/VisitContext';
+import { formatDate } from './U12Receipt';
 
 export default function U13History() {
   const navigate = useNavigate();
-  const { user, logout } = useAuth();
-  const [records, setRecords] = useState<VisitRecord[] | null>(null);
+  const { state, dispatch } = useVisit();
+  const user = state.user;
+  const { data: visits, loading } = useAsync(
+    () => (user ? api.listVisits(user.id) : Promise.resolve([])),
+    [user?.id],
+  );
 
-  useEffect(() => {
-    if (user) api.getVisitHistory(user.id).then(setRecords);
-  }, [user]);
+  if (!user) return <Navigate to="/login?redirect=/history" replace />;
 
-  if (!user) return <Navigate to="/login?next=/history" replace />;
+  const logout = () => {
+    api.logout(); // 서버 세션 종료 (실패해도 화면은 바로 로그아웃)
+    dispatch({ type: 'logout' });
+    navigate('/', { replace: true });
+  };
 
   return (
-    <MobileLayout
+    <MobileShell
+      screenId="U-13"
       title="관람기록"
-      right={<button className="link small" onClick={() => { logout(); navigate('/'); }}>로그아웃</button>}
+      right={
+        <button className="text-btn" onClick={logout}>
+          로그아웃
+        </button>
+      }
     >
-      <div className="page-head">
-        <h1 className="h1">{user.nickname || '회원'} 님의 관람기록</h1>
-        <p className="sub">지난 관람과 아트 영수증을 다시 확인할 수 있어요.</p>
-      </div>
+      <Lead title={`${user.nickname || '나'}의 관람기록`} desc="지난 관람의 아트 영수증을 다시 확인할 수 있어요." />
 
-      {records === null && <p className="muted">불러오는 중…</p>}
-      {records?.length === 0 && (
-        <div className="card card--soft center">
+      {loading && <Spinner />}
+      {visits && visits.length === 0 && (
+        <div className="empty">
           <p>아직 저장된 관람기록이 없어요.</p>
-          <button className="link small" onClick={() => navigate('/')}>관람 시작하기</button>
+          <Link className="btn outline" to="/">
+            관람 시작하기
+          </Link>
         </div>
       )}
 
-      <ul className="stack-12 plain-list">
-        {records?.map((r) => (
-          <li key={r.id}>
-            <button className="history-card" onClick={() => navigate(`/history/${r.id}`)}>
-              <span className="history-card__body">
-                <span className="label">{fmtDate(r.date)}</span>
-                <span className="strong">{r.exhibitionTitle}</span>
-                <span className="muted small">{r.venue}</span>
-                <span className="history-card__stats">
-                  <span>작품 {r.viewedCount}점</span>
-                  <span>관람 {r.durationMin}분</span>
-                  <span>👍 {r.likeCount}</span>
+      <ul className="history-list">
+        {visits?.map((v) => (
+          <li key={v.id}>
+            <button className="history-card" onClick={() => navigate(`/receipt/${v.id}`)}>
+              <div className="history-top">
+                <span className="muted small">
+                  <Icon name="pin" size={15} /> {v.venue}
                 </span>
+                <span className="muted small">{formatDate(v.date)}</span>
+              </div>
+              <strong>{v.exhibitionTitle}</strong>
+              <div className="history-stats">
+                <span>작품 {v.viewedArtworkIds.length}점</span>
+                <span>관람 {v.durationMin}분</span>
+                <span>👍 {Object.values(v.reactions).filter((r) => r === 'like').length}</span>
+              </div>
+              <span className="history-cta">
+                <Icon name="receipt" size={16} /> 아트 영수증 보기 <Icon name="chevron" size={16} />
               </span>
-              <span className="history-card__cta">아트 영수증 <IconChevron width={16} height={16} /></span>
             </button>
           </li>
         ))}
       </ul>
-    </MobileLayout>
+    </MobileShell>
   );
 }

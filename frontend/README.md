@@ -1,65 +1,75 @@
-# ARTI 웹 프론트엔드 (React + TypeScript)
+# ARTI 프론트엔드
 
-「5. 화면(UI) 설계」 문서를 기준으로 구현한 ARTI 사용자 모바일 웹(U-01 ~ U-15)과 관리자 데스크톱 웹(A-01 ~ A-06)입니다.
+「5. 화면(UI) 설계」 문서의 사용자 모바일 웹(U-01 ~ U-15)과 관리자 데스크톱 웹(A-01 ~ A-06)을
+React + TypeScript + Vite로 구현한 프론트엔드입니다.
 
 ## 실행
 
 ```bash
-cd frontend
 npm install
 npm run dev        # http://localhost:5173
-npm run build      # 타입 체크 + 프로덕션 빌드 (dist/)
+npm run build      # 타입 검사 + 배포용 빌드(dist/)
 ```
 
-- 화면 목록 바로가기: `http://localhost:5173/screens`
-- 데모 계정 — 사용자 `demo@arti.kr / arti1234`, 관리자 `admin / admin1234`
-- 모바일 화면은 브라우저 개발자도구의 모바일 뷰(예: iPhone 14)로 보는 것을 권장합니다.
+휴대폰에서 확인하려면 `npm run dev -- --host` 후 같은 Wi-Fi에서 표시되는 IP 주소로 접속합니다.
 
-## 화면 ID ↔ URL
-
-| 화면 ID | 화면명 | URL |
+### 데모 계정
+| 구분 | ID | 비밀번호 |
 |---|---|---|
-| U-01 | 서비스 시작 | `/`, `/exhibition/:id` (전시 URL·입구 QR) |
-| U-02 | 로그인 선택 | `/start` |
-| U-03 | 로그인 | `/login` (`?next=` 인증 후 복귀) |
-| U-04 | 회원가입 | `/signup` |
-| U-05 | 취향 파악 | `/taste` |
-| U-06 | 저장 취향 확인 | `/taste/saved` |
-| U-07 | 관람 시간 선택 | `/time` |
-| U-08 | 개인화 작품 추천 | `/recommend` |
-| U-09 | 추천 관람 경로(2D 지도) | `/route` |
-| U-10 | 작품 감상 | `/view` |
-| U-11 | AI 자유 질문 | `/ask` |
-| U-12 | 아트 영수증 | `/receipt`, `/history/:id` (조회 모드) |
-| U-13 | 관람기록 | `/history` (미로그인 시 U-03 → 복귀) |
-| U-14 | 비밀번호 찾기 | `/forgot-password` |
-| U-15 | 새 비밀번호 설정 | `/reset-password?token=…` |
-| A-01 | 관리자 로그인 | `/admin/login` |
-| A-02 | 관리자 대시보드 | `/admin` |
-| A-03 | 전시 관리 | `/admin/exhibitions` |
-| A-04 | 작품 등록·수정 | `/admin/artworks`, `/admin/artworks/:id`, `/admin/artworks/new` |
-| A-05 | 위치·지도 관리 | `/admin/map` |
-| A-06 | 회원 조회 | `/admin/members` |
+| 사용자 | demo@arti.app | arti1234 |
+| 관리자 (`/admin`) | admin | admin1234 |
 
-## 구조
+## 폴더 구조
 
 ```
 src/
-├─ api/index.ts          # 목업 API (localStorage 기반). 백엔드 연동 시 이 파일만 fetch로 교체
-├─ data/mock.ts          # 전시·작품·평면도·취향 옵션·데모 계정 목업 데이터
-├─ store/                # AuthContext(로그인/관리자), VisitContext(관람 세션 상태)
-├─ utils/recommend.ts    # 취향+시간 기반 추천, 입구 기준 관람 순서(최근접 이웃) 계산
-├─ components/           # MobileLayout, FloorMap(2D 평면도), ArtImage, ReceiptCard, Icons
-├─ hooks/useSpeech.ts    # Web Speech API 기반 TTS(음성 설명)
-└─ pages/user|admin/     # 화면 ID별 페이지 컴포넌트
+├── App.tsx                 라우팅 표 (화면 ID ↔ URL 매핑 주석 포함)
+├── main.tsx                진입점
+├── types.ts                도메인 타입 (Artwork, Exhibition, VisitRecord …)
+├── api/client.ts           API 계층 (백엔드 REST 호출)
+├── data/mock.ts            화면 공통 상수 (취향 라벨·관람 시간 옵션)
+├── store/VisitContext.tsx  관람 세션 전역 상태 (Context + useReducer)
+├── lib/
+│   ├── recommend.ts        이동 시간·추천 이유 문장 (추천 자체는 서버에서)
+│   ├── useAsync.ts         비동기 호출 훅
+│   ├── useSpeech.ts        TTS(음성 설명) 훅
+│   ├── storage.ts          localStorage/sessionStorage 안전 래퍼
+│   └── josa.ts             한국어 조사(와/과) 처리
+├── components/             MobileShell, FloorMap(2D 평면도), ArtImage, Icon, Field
+├── pages/user/             U01Start ~ U15ResetPassword
+├── pages/admin/            AdminLayout, A01Login ~ A06Members
+└── styles/app.css
 ```
 
-## 구현 메모
+## URL 설계 (설계서 5.3 외부 URL 진입)
 
-- **화면 전환**은 설계서 5.5.1 주요 화면 전환표를 따릅니다. U-10에서 남은 작품이 있으면 U-09로, 없으면 U-12로 이동합니다.
-- **로그인은 선택 기능**입니다. 비회원도 추천·지도·감상 기능을 모두 사용할 수 있고, 로그인 사용자는 취향과 아트 영수증이 저장됩니다.
-- **관리자에서 수정한 작품·위치 데이터는 사용자 화면 추천/지도에 바로 반영**됩니다(같은 목업 DB 사용).
-- **AI 응답(U-11, AI 맞춤 설명)은 목업**입니다. 실제 구현에서는 `api.askAI`를 검수된 작품 자료를 근거로 답하는 백엔드 API 호출로 교체합니다.
-- **작품 이미지**는 저작권 이슈를 피하기 위해 팔레트 기반 플레이스홀더를 그립니다. 관리자 화면에서 이미지 URL을 입력하면 실제 이미지가 표시됩니다.
-- 비밀번호 재설정 메일은 데모에서 실제로 발송하지 않고, U-14 화면에 재설정 링크를 바로 보여줍니다.
-- `/screens`의 「데모 데이터 초기화」로 목업 데이터를 처음 상태로 되돌릴 수 있습니다.
+| URL | 화면 | 비고 |
+|---|---|---|
+| `/exhibitions/:exhibitionId` | U-01 | 전시 입구 QR이 가리킬 주소 |
+| `/login` | U-03 | `?redirect=` 로 인증 후 원래 화면 복귀 |
+| `/signup` | U-04 | |
+| `/history` | U-13 | 미로그인 → `/login?redirect=/history` → 복귀 |
+| `/password/reset?token=` | U-15 | 비밀번호 재설정 메일 링크 |
+
+## 화면 전환 규칙 (설계서 5.5)
+
+- 로그인 사용자: U-03 → U-06(저장 취향) → U-07
+- 비회원/신규: U-05(취향 파악, 2개 이상 선택) → U-07
+- U-10 "다음 작품 안내": 남은 작품 있으면 U-09(같은 지도 화면 재사용), 없으면 U-12
+- 👍/👎는 선택사항, 누르지 않아도 다음 작품으로 진행
+- 작품별 QR은 MVP 범위에서 제외
+
+## 백엔드 연결
+
+화면은 `src/api/client.ts`를 통해 백엔드(`../backend`) REST API를 호출합니다.
+개발 중에는 Vite 프록시가 `/api` 요청을 `http://localhost:4000`으로 넘기므로 **백엔드를 먼저 띄워 주세요.**
+
+```bash
+cd ../backend && npm install && npm run dev   # 터미널 1
+cd ../frontend && npm install && npm run dev  # 터미널 2 → http://localhost:5173
+```
+
+- 다른 주소의 서버를 쓰려면: 개발 프록시 대상은 `VITE_API_PROXY`, 빌드 결과물의 API 주소는 `VITE_API_BASE`(예: `https://api.example.com/api`, 이 경우 백엔드 `CORS_ORIGIN` 설정 필요)
+- 로그인 토큰은 localStorage(`arti.token`, 관리자는 `arti.adminToken`)에 저장되고, 만료되면 자동으로 지워집니다.
+- 추천·AI 답변·비밀번호 재설정은 모두 서버에서 처리합니다. API 목록과 설계 메모는 [`backend/README.md`](../backend/README.md) 참고.
+- 데모 데이터를 처음 상태로 돌리려면 백엔드에서 `npm run db:reset`.

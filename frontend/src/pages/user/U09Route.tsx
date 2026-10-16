@@ -1,87 +1,133 @@
-// U-09 추천 관람 경로(2D 지도): 추천 작품 위치·관람 순서 및 다음 작품 위치 확인
+/**
+ * U-09 추천 관람 경로 (2D 지도)
+ * - 최초 진입: "관람 시작하기" → U-10
+ * - 작품 감상 후 "다음 작품 안내"로 다시 들어오면 같은 화면을 재사용해 다음 작품 위치를 보여 준다.
+ * 실시간 실내 내비게이션이 아니라 위치와 순서를 시각적으로 안내하는 수준.
+ */
 import { useState } from 'react';
 import { Navigate, useNavigate } from 'react-router-dom';
-import FloorMap, { type MapMarker } from '../../components/FloorMap';
-import MobileLayout from '../../components/MobileLayout';
-import { ENTRANCE, roomName } from '../../data/mock';
+import { MobileShell, Spinner } from '../../components/MobileShell';
+import { FloorMap, type MapMarker } from '../../components/FloorMap';
+import { api } from '../../api/client';
+import { useAsync } from '../../lib/useAsync';
+import { walkMinutes } from '../../lib/recommend';
 import { useVisit } from '../../store/VisitContext';
-import { walkMinutes } from '../../utils/recommend';
+import type { Artwork, MapPoint } from '../../types';
 
 export default function U09Route() {
   const navigate = useNavigate();
-  const visit = useVisit();
-  const { recommendations: recs, currentIndex } = visit;
+  const { state, dispatch } = useVisit();
+  const { exhibitionId, recommendations, current, startedAt } = state;
   const [focusId, setFocusId] = useState<string | null>(null);
 
-  if (!recs.length) return <Navigate to="/time" replace />;
+  const { data, loading } = useAsync(
+    () => Promise.all([api.getExhibition(exhibitionId), api.listArtworks(exhibitionId)]),
+    [exhibitionId],
+  );
 
-  const current = recs[currentIndex];
-  const prev = recs[currentIndex - 1];
-  const here = prev?.artwork.position ?? ENTRANCE;
-  const isFirst = visit.viewedIds.length === 0;
+  if (recommendations.length === 0) return <Navigate to="/recommend" replace />;
+  if (current >= recommendations.length) return <Navigate to="/receipt" replace />;
 
-  const markers: MapMarker[] = recs
-    .filter((r) => r.artwork.position)
-    .map((r) => {
-      const idx = recs.indexOf(r);
-      return {
-        id: r.artwork.id,
-        label: String(idx + 1),
-        position: r.artwork.position!,
-        state: idx < currentIndex ? 'done' : idx === currentIndex ? 'current' : 'upcoming',
-      };
-    });
+  if (loading || !data) {
+    return (
+      <MobileShell screenId="U-09" title="추천 관람 경로" back="/recommend">
+        <Spinner />
+      </MobileShell>
+    );
+  }
 
-  const focus = recs.find((r) => r.artwork.id === focusId) ?? current;
-  const focusIdx = recs.indexOf(focus);
+  const [ex, artworks] = data;
+  const byId = new Map<string, Artwork>(artworks.map((w) => [w.id, w]));
+  const ordered = recommendations.map((r) => byId.get(r.artworkId)).filter((w): w is Artwork => !!w?.position);
 
-  const onStart = () => {
-    visit.startViewing();
-    navigate('/view');
+  const target = ordered[current];
+  const from: MapPoint = current === 0 ? ex.entrance : ordered[current - 1].position!;
+  const roomName = (w: Artwork) => ex.rooms.find((r) => r.id === w.roomId)?.name ?? '';
+
+  const markers: MapMarker[] = ordered.map((w, i) => ({
+    id: w.id,
+    label: String(i + 1),
+    point: w.position!,
+    title: w.title,
+    state: i < current ? 'done' : i === current ? 'current' : focusId === w.id ? 'selected' : 'upcoming',
+  }));
+
+  const focus = focusId ? byId.get(focusId) : null;
+  const isFirst = current === 0 && !startedAt;
+
+  const go = () => {
+    dispatch({ type: 'startVisit' });
+    navigate('/artwork');
   };
 
   return (
-    <MobileLayout
+    <MobileShell
+      screenId="U-09"
       title="추천 관람 경로"
       back="/recommend"
       footer={
-        <button className="btn btn--primary" onClick={onStart}>
-          {isFirst ? '관람 시작하기' : `${currentIndex + 1}번째 작품 감상하기`}
+        <button className="btn primary block" onClick={go}>
+          {isFirst ? '관람 시작하기' : `${current + 1}번 작품 감상하기`}
         </button>
       }
     >
-      <p className="label">추천 작품 {currentIndex + 1}/{recs.length}</p>
+      <div className="route-head">
+        <span className="muted">
+          추천 작품 {current + 1}/{ordered.length}
+        </span>
+        <div className="progress-dots" aria-hidden="true">
+          {ordered.map((w, i) => (
+            <span key={w.id} className={i < current ? 'done' : i === current ? 'cur' : ''} />
+          ))}
+        </div>
+      </div>
 
       <div className="map-card">
-        <FloorMap markers={markers} showRoute here={here} onMarkerClick={setFocusId} />
+        <FloorMap
+          exhibition={ex}
+          markers={markers}
+          route={[ex.entrance, ...ordered.map((w) => w.position!)]}
+          activeLeg={[from, target.position!]}
+          aspect={0.95}
+          onMarkerClick={(id) => setFocusId((f) => (f === id ? null : id))}
+        />
+
         <div className="next-card">
-          <div>
-            <p className="label">{focus === current ? '다음 작품' : `${focusIdx + 1}번 작품`}</p>
-            <p className="strong">{focus.artwork.title} · {roomName(focus.artwork.roomId)}</p>
-          </div>
-          {focus === current && current.artwork.position && (
-            <span className="muted small nowrap">약 {walkMinutes(here, current.artwork.position)}분</span>
+          {focus && focus.id !== target.id ? (
+            <>
+              <span className="eyebrow">{ordered.findIndex((w) => w.id === focus.id) + 1}번 작품</span>
+              <div className="next-row">
+                <strong>
+                  {focus.title} · {roomName(focus)}
+                </strong>
+                <button className="text-btn" onClick={() => setFocusId(null)}>
+                  다음 작품 보기
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <span className="eyebrow">{isFirst ? '첫 번째 작품' : '다음 작품'}</span>
+              <div className="next-row">
+                <strong>
+                  {target.title} · {roomName(target)}
+                </strong>
+                <span className="muted small">약 {walkMinutes(from, target.position!)}분</span>
+              </div>
+            </>
           )}
         </div>
       </div>
 
-      <div className="legend">
-        <span><i className="dot dot--here" />현재 위치</span>
-        <span><i className="dot dot--current" />다음 작품</span>
-        <span><i className="dot dot--done" />감상 완료</span>
-      </div>
-
-      <p className="note">실시간 실내 내비게이션이 아닌, 추천 작품의 위치와 관람 순서를 안내합니다.</p>
-
-      <ol className="route-list plain-list">
-        {recs.map((r, i) => (
-          <li key={r.artwork.id} className={i < currentIndex ? 'is-done' : i === currentIndex ? 'is-current' : ''}>
-            <span className="route-list__num">{i + 1}</span>
-            <span className="route-list__title">{r.artwork.title}</span>
-            <span className="muted small">{roomName(r.artwork.roomId)}</span>
+      <ol className="route-list">
+        {ordered.map((w, i) => (
+          <li key={w.id} className={i < current ? 'done' : i === current ? 'cur' : ''}>
+            <span className="route-num">{i < current ? '✓' : i + 1}</span>
+            <span className="route-title">{w.title}</span>
+            <span className="muted small">{roomName(w)}</span>
           </li>
         ))}
       </ol>
-    </MobileLayout>
+    </MobileShell>
   );
 }

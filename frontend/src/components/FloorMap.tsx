@@ -1,79 +1,109 @@
+/**
+ * 전시실 2D 평면도 (U-09 사용자 경로 / A-05 관리자 위치 지정에서 공통 사용)
+ * 좌표는 모두 0~100 퍼센트로 저장하고, 그릴 때 SVG 좌표로 변환한다.
+ * → 평면도 표시 크기가 화면마다 달라도 같은 데이터를 쓸 수 있다.
+ */
 import type { MouseEvent } from 'react';
-import { ENTRANCE, ROOMS } from '../data/mock';
-import type { Point } from '../types';
+import type { Exhibition, MapPoint } from '../types';
+
+export type MarkerState = 'done' | 'current' | 'upcoming' | 'plain' | 'selected';
 
 export interface MapMarker {
   id: string;
-  label: string;
-  position: Point;
-  state?: 'done' | 'current' | 'upcoming' | 'selected' | 'default';
+  label: string;         // 마커 안에 표시할 번호
+  point: MapPoint;
+  state: MarkerState;
+  title?: string;        // 접근성/툴팁용 작품명
 }
 
 interface Props {
+  exhibition: Exhibition;
   markers: MapMarker[];
-  /** 마커 순서대로 경로선을 그린다 */
-  showRoute?: boolean;
-  /** 관람자의 현재 위치(직전 감상 작품 또는 입구) */
-  here?: Point | null;
-  onMapClick?: (p: Point, roomId: string | null) => void;
+  /** 관람 경로 (입구 → 1 → 2 → …) */
+  route?: MapPoint[];
+  /** 강조할 다음 이동 구간 */
+  activeLeg?: [MapPoint, MapPoint] | null;
+  aspect?: number;       // 가로/세로
+  onMapClick?: (p: MapPoint) => void;
   onMarkerClick?: (id: string) => void;
-  className?: string;
+  showEntrance?: boolean;
 }
 
-/** 전시실 2D 평면도. 실시간 실내 내비게이션이 아닌, 작품 위치·순서를 시각적으로 안내하는 수준 */
-export default function FloorMap({ markers, showRoute, here, onMapClick, onMarkerClick, className }: Props) {
+export function FloorMap({
+  exhibition,
+  markers,
+  route,
+  activeLeg,
+  aspect = 1,
+  onMapClick,
+  onMarkerClick,
+  showEntrance = true,
+}: Props) {
+  const H = 100 / aspect;
+  const sy = (y: number) => (y * H) / 100;
+  const toPts = (ps: MapPoint[]) => ps.map((p) => `${p.x},${sy(p.y)}`).join(' ');
+
   const handleClick = (e: MouseEvent<SVGSVGElement>) => {
     if (!onMapClick) return;
-    // viewBox 좌표로 변환 (SVG가 레터박스로 그려져도 정확하도록 CTM 사용)
-    const svg = e.currentTarget;
-    const ctm = svg.getScreenCTM();
-    if (!ctm) return;
-    const pt = new DOMPoint(e.clientX, e.clientY).matrixTransform(ctm.inverse());
-    const p = { x: Math.round(pt.x * 10) / 10, y: Math.round(pt.y * 10) / 10 };
-    const room = ROOMS.find((r) => p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h);
-    onMapClick(p, room?.id ?? null);
+    const r = e.currentTarget.getBoundingClientRect();
+    const x = ((e.clientX - r.left) / r.width) * 100;
+    const y = ((e.clientY - r.top) / r.height) * 100;
+    onMapClick({ x: Math.round(x * 10) / 10, y: Math.round(y * 10) / 10 });
   };
-
-  const routePts = markers.map((m) => `${m.position.x},${m.position.y}`).join(' ');
 
   return (
     <svg
-      className={`floor-map ${onMapClick ? 'floor-map--editable' : ''} ${className ?? ''}`}
-      viewBox="0 0 100 100"
+      className={`floor-map ${onMapClick ? 'clickable' : ''}`}
+      viewBox={`0 0 100 ${H}`}
       onClick={handleClick}
       role="img"
-      aria-label="전시실 평면도"
+      aria-label={`${exhibition.title} 평면도`}
     >
-      {ROOMS.map((r) => (
+      {exhibition.rooms.map((r) => (
         <g key={r.id}>
-          <rect className="floor-map__room" x={r.x} y={r.y} width={r.w} height={r.h} rx={1.2} />
-          <text className="floor-map__room-label" x={r.x + 2} y={r.y + 4.5}>{r.name}</text>
+          <rect
+            className="fm-room"
+            x={r.rect.x}
+            y={sy(r.rect.y)}
+            width={r.rect.w}
+            height={sy(r.rect.h)}
+            rx={1.2}
+          />
+          <text className="fm-room-label" x={r.rect.x + 2} y={sy(r.rect.y) + 4.2}>
+            {r.name}
+          </text>
         </g>
       ))}
-      <g className="floor-map__entrance">
-        <rect x={ENTRANCE.x - 7} y={ENTRANCE.y - 3} width={14} height={4} rx={1} />
-        <text x={ENTRANCE.x} y={ENTRANCE.y - 0.2} textAnchor="middle">입구</text>
-      </g>
-      {showRoute && markers.length > 1 && <polyline className="floor-map__route" points={routePts} />}
-      {here && (
-        <g className="floor-map__here">
-          <circle cx={here.x} cy={here.y} r={3.2} className="floor-map__here-pulse" />
-          <circle cx={here.x} cy={here.y} r={1.6} />
+
+      {showEntrance && (
+        <g className="fm-entrance">
+          <rect x={exhibition.entrance.x - 6} y={sy(exhibition.entrance.y) - 2.6} width={12} height={2.6} rx={0.8} />
+          <text x={exhibition.entrance.x + 7.5} y={sy(exhibition.entrance.y) - 0.3}>
+            입구
+          </text>
         </g>
       )}
+
+      {route && route.length > 1 && <polyline className="fm-route" points={toPts(route)} />}
+      {activeLeg && <polyline className="fm-route active" points={toPts(activeLeg)} />}
+
       {markers.map((m) => (
         <g
           key={m.id}
-          className={`floor-map__marker floor-map__marker--${m.state ?? 'default'}`}
+          className={`fm-marker ${m.state}`}
+          transform={`translate(${m.point.x} ${sy(m.point.y)})`}
           onClick={(e) => {
-            if (onMarkerClick) {
-              e.stopPropagation();
-              onMarkerClick(m.id);
-            }
+            if (!onMarkerClick) return;
+            e.stopPropagation();
+            onMarkerClick(m.id);
           }}
         >
-          <circle cx={m.position.x} cy={m.position.y} r={3.6} />
-          <text x={m.position.x} y={m.position.y + 1.3} textAnchor="middle">{m.label}</text>
+          {m.title && <title>{m.title}</title>}
+          {m.state === 'current' && <circle className="fm-pulse" r={5.5} />}
+          <circle r={3.4} />
+          <text textAnchor="middle" dy="1.25">
+            {m.state === 'done' ? '✓' : m.label}
+          </text>
         </g>
       ))}
     </svg>
